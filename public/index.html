@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Backgammon 3D</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <!-- Lobby -->
+  <div id="lobby" class="panel">
+    <h1>Backgammon <span>3D</span></h1>
+    <p class="tag">Real-time multiplayer. Create a game and share the code, or join one.</p>
+    <button id="createBtn" class="primary">Create new game</button>
+    <div class="or">or</div>
+    <div class="joinRow">
+      <input id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off" />
+      <button id="joinBtn">Join</button>
+    </div>
+    <div id="lobbyMsg" class="err"></div>
+  </div>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <div class="hud-top">
+      <div class="chip">Room <b id="roomCode">----</b></div>
+      <div class="chip" id="youChip">You: —</div>
+      <div class="chip" id="turnChip">Waiting…</div>
+    </div>
+    <div class="hud-dice" id="dice"></div>
+    <div class="hud-msg" id="statusMsg"></div>
+    <div class="hud-actions">
+      <button id="rollBtn" class="primary hidden">Roll dice</button>
+      <button id="newGameBtn" class="ghost">New game</button>
+    </div>
+    <div class="hud-hint">Drag to orbit · Right-drag to pan · Scroll to zoom · Click a checker to move</div>
+  </div>
+
+  <div id="winBanner" class="hidden"></div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "backgammon-3d",
+  "version": "1.0.0",
+  "description": "Fully playable 3D multiplayer Backgammon",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
