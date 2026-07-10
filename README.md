@@ -39,8 +39,29 @@ If port 3000 is busy, pick another: `PORT=3100 npm start`.
 The server validates every move, so the two clients can never desync and
 illegal moves are rejected.
 
+## Reconnect
+
+Each seated player is issued a private session token (kept in `localStorage`).
+If you refresh or briefly lose connection, the client automatically rejoins and
+reclaims your seat — the board is preserved and your opponent sees an "opponent
+disconnected" notice until you're back. A vacated room is kept alive for two
+minutes to allow reconnection before it's cleaned up.
+
+## Tests
+
+```bash
+npm test
+```
+
+Runs the rules-engine unit suite (`test/backgammon.test.js`) with Node's
+built-in test runner — no extra dependencies. Covers movement direction,
+blocking/hitting, bar re-entry, bearing off (including the overflow rule),
+forced maximal dice usage, the "must play the larger die" rule, win detection,
+and a full deterministic self-played game that checks checker conservation.
+
 ## Layout
 
 - `server/backgammon.js` — pure rules engine (move generation, legality, bearing off)
-- `server/index.js` — HTTP + WebSocket server, rooms, turn flow
+- `server/index.js` — HTTP + WebSocket server, rooms, turn flow, reconnect
 - `public/` — Three.js client (`main.js`), UI (`index.html`, `style.css`)
+- `test/backgammon.test.js` — rules-engine unit tests

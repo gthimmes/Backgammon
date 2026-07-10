@@ -248,20 +248,51 @@ let ws;
 let you = null;          // 'white' | 'black' | null (spectator)
 let state = null;
 let selected = null;     // currently selected source point
+let reconnectAttempts = 0;
+
+// Persisted session so a refresh or dropped connection reclaims the same seat.
+const SESSION_KEY = 'bg_session';
+function saveSession(s) { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch {} }
+function loadSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch { return null; } }
+function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch {} }
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onopen = () => {
+    reconnectAttempts = 0;
+    const s = loadSession();
+    if (s && s.code && s.token) sendWs({ type: 'rejoin', code: s.code, token: s.token });
+  };
   ws.onmessage = (ev) => onMessage(JSON.parse(ev.data));
-  ws.onclose = () => setLobbyMsg('Disconnected. Refresh to reconnect.');
+  ws.onclose = () => {
+    // Only auto-reconnect if we still hold a session to reclaim.
+    if (loadSession() && reconnectAttempts < 10) {
+      reconnectAttempts++;
+      flashStatus('Connection lost — reconnecting…');
+      setTimeout(connect, Math.min(1000 * reconnectAttempts, 5000));
+    } else {
+      setLobbyMsg('Disconnected. Refresh to reconnect.');
+    }
+  };
 }
 function sendWs(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
 function onMessage(msg) {
   if (msg.type === 'joined') {
     you = msg.color;
+    // Remember a real seat (with its token) so we can reconnect to it later.
+    if (msg.color && msg.token) saveSession({ code: msg.code, color: msg.color, token: msg.token });
     enterGame(msg.code);
   } else if (msg.type === 'error') {
+    // A failed rejoin means the saved seat is gone — drop it and return to lobby.
+    if (msg.code === 'no-room' || msg.code === 'bad-token') {
+      clearSession();
+      you = null;
+      state = null;
+      lobby.classList.remove('hidden');
+      hud.classList.add('hidden');
+    }
     setLobbyMsg(msg.message);
     flashStatus(msg.message);
   } else if (msg.type === 'state') {
@@ -338,8 +369,15 @@ function renderState() {
   const canRoll = state.status === 'playing' && state.current === you && !state.turn;
   el('rollBtn').classList.toggle('hidden', !canRoll);
 
-  // Status message.
-  el('statusMsg').textContent = state.message || '';
+  // Status message — flag a disconnected opponent while the game is live.
+  let statusText = state.message || '';
+  if (you && state.status !== 'finished' && state.connected) {
+    const opp = you === 'white' ? 'black' : 'white';
+    if (state.players[opp] && !state.connected[opp]) {
+      statusText = `Opponent (${opp}) disconnected — waiting for them to reconnect…`;
+    }
+  }
+  el('statusMsg').textContent = statusText;
 
   // Win banner.
   const banner = el('winBanner');

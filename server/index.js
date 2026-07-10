@@ -2,6 +2,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import {
   initBoard, singleMoves, applyMove, legalMoves, checkWinner, OPP,
@@ -9,6 +10,9 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
+// How long a room is kept alive after its last client disconnects, so a
+// player who refreshes or briefly drops can reclaim their seat.
+const CLEANUP_MS = 2 * 60 * 1000;
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -88,8 +92,23 @@ function serializeState(room) {
       white: !!room.players.white,
       black: !!room.players.black,
     },
+    // Which seats currently have a live socket (vs. temporarily disconnected).
+    connected: {
+      white: !!(room.players.white && room.players.white.ws),
+      black: !!(room.players.black && room.players.black.ws),
+    },
     code: room.code,
   };
+}
+
+function scheduleCleanup(room) {
+  clearCleanup(room);
+  room.cleanupTimer = setTimeout(() => rooms.delete(room.code), CLEANUP_MS);
+  room.cleanupTimer.unref?.();
+}
+
+function clearCleanup(room) {
+  if (room.cleanupTimer) { clearTimeout(room.cleanupTimer); room.cleanupTimer = null; }
 }
 
 function broadcast(room) {
@@ -118,12 +137,12 @@ wss.on('connection', (ws) => {
     const room = ws.room;
     if (!room) return;
     room.clients.delete(ws);
-    if (ws.color && room.players[ws.color] === ws) room.players[ws.color] = null;
-    if (room.clients.size === 0) {
-      rooms.delete(room.code);
-    } else {
-      broadcast(room);
-    }
+    // Keep the seat (and its token) reserved so the player can reconnect;
+    // just mark the socket as gone.
+    const seat = ws.color ? room.players[ws.color] : null;
+    if (seat && seat.ws === ws) seat.ws = null;
+    if (room.clients.size === 0) scheduleCleanup(room);
+    else broadcast(room);
   });
 });
 
@@ -131,28 +150,53 @@ function handle(ws, msg) {
   switch (msg.type) {
     case 'create': {
       const code = makeCode();
-      const room = { code, game: newGame(), players: { white: ws, black: null }, clients: new Set([ws]) };
+      const token = randomUUID();
+      const room = {
+        code, game: newGame(), cleanupTimer: null,
+        players: { white: { token, ws }, black: null },
+        clients: new Set([ws]),
+      };
       rooms.set(code, room);
       ws.room = room;
       ws.color = 'white';
-      send(ws, { type: 'joined', code, color: 'white' });
+      send(ws, { type: 'joined', code, color: 'white', token });
       broadcast(room);
       break;
     }
     case 'join': {
       const room = rooms.get((msg.code || '').toUpperCase());
-      if (!room) return send(ws, { type: 'error', message: 'No game with that code.' });
+      if (!room) return send(ws, { type: 'error', code: 'no-room', message: 'No game with that code.' });
+      clearCleanup(room);
       room.clients.add(ws);
       ws.room = room;
-      // Assign to an open seat, otherwise spectate.
-      if (!room.players.white) { room.players.white = ws; ws.color = 'white'; }
-      else if (!room.players.black) { room.players.black = ws; ws.color = 'black'; }
+      // Assign to an open seat (occupied-but-disconnected seats stay reserved
+      // for their original player), otherwise spectate.
+      let token = null;
+      if (!room.players.white) { token = randomUUID(); room.players.white = { token, ws }; ws.color = 'white'; }
+      else if (!room.players.black) { token = randomUUID(); room.players.black = { token, ws }; ws.color = 'black'; }
       else ws.color = null;
-      send(ws, { type: 'joined', code: room.code, color: ws.color });
+      send(ws, { type: 'joined', code: room.code, color: ws.color, token });
       // Start the match once both seats are filled and it hasn't started.
       if (room.players.white && room.players.black && room.game.status === 'waiting') {
         openingRoll(room.game);
       }
+      broadcast(room);
+      break;
+    }
+    case 'rejoin': {
+      const room = rooms.get((msg.code || '').toUpperCase());
+      if (!room) return send(ws, { type: 'error', code: 'no-room', message: 'That game no longer exists.' });
+      let color = null;
+      for (const c of ['white', 'black']) {
+        if (room.players[c] && room.players[c].token === msg.token) { color = c; break; }
+      }
+      if (!color) return send(ws, { type: 'error', code: 'bad-token', message: 'Could not rejoin that seat.' });
+      clearCleanup(room);
+      room.players[color].ws = ws;
+      room.clients.add(ws);
+      ws.room = room;
+      ws.color = color;
+      send(ws, { type: 'joined', code: room.code, color, token: msg.token });
       broadcast(room);
       break;
     }
