@@ -172,6 +172,126 @@ const dynamic = new THREE.Group();
 scene.add(dynamic);
 const highlights = new THREE.Group();
 scene.add(highlights);
+const animGroup = new THREE.Group();
+scene.add(animGroup);
+const clock = new THREE.Clock();
+
+// ---- Move animation: tween a checker from source to destination -----------
+// Each broadcast is a single sub-move, so the delta between two consecutive
+// boards is at most one checker per color moving (plus a possible hit).
+let anims = [];
+
+function locWorld(color, loc) {
+  if (loc === 'bar') return { x: 0, y: CH_Y + 0.4, z: color === 'white' ? 0.7 : -0.7 };
+  if (loc === 'off') return { x: OFF_X, y: CH_Y, z: color === 'white' ? 5.6 : -5.6 };
+  const n = Number(loc);
+  const { x, z, near } = pointPos(n);
+  return { x, y: CH_Y, z: z + (near ? -1 : 1) * CH_R };
+}
+
+// Map a board to { loc: count } for one color (loc = 1..24 | 'bar' | 'off').
+function locCounts(board, color) {
+  const m = {};
+  for (let p = 1; p <= 24; p++) {
+    const c = board.points[p];
+    if (c && c.color === color) m[p] = c.count;
+  }
+  if (board.bar[color]) m.bar = board.bar[color];
+  if (board.off[color]) m.off = board.off[color];
+  return m;
+}
+
+// Pair each vacated slot with a newly filled slot to reconstruct moves.
+function diffColor(prev, next, color) {
+  const a = locCounts(prev, color), b = locCounts(next, color);
+  const locs = new Set([...Object.keys(a), ...Object.keys(b)]);
+  const dec = [], inc = [];
+  for (const l of locs) {
+    const d = (b[l] || 0) - (a[l] || 0);
+    for (let i = 0; i < -d; i++) dec.push(l);
+    for (let i = 0; i < d; i++) inc.push(l);
+  }
+  const moves = [];
+  for (let i = 0; i < Math.min(dec.length, inc.length); i++) {
+    moves.push({ color, from: dec[i], to: inc[i] });
+  }
+  return moves;
+}
+
+function computeAnims(prev, next) {
+  const moves = [...diffColor(prev, next, 'white'), ...diffColor(prev, next, 'black')];
+  if (moves.length === 0 || moves.length > 4) return []; // skip resets/big jumps
+  return moves;
+}
+
+function spawnMoveAnim(m) {
+  const mesh = new THREE.Mesh(checkerGeo, checkerMats[m.color]);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  animGroup.add(mesh);
+  anims.push({ mesh, from: locWorld(m.color, m.from), to: locWorld(m.color, m.to), t: 0, dur: 0.3 });
+}
+
+function stepAnims(dt) {
+  if (anims.length === 0) return;
+  for (const a of anims) {
+    a.t = Math.min(1, a.t + dt / a.dur);
+    const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 2) / 2; // easeInOut
+    const arc = Math.sin(Math.PI * a.t) * 0.7;
+    a.mesh.position.set(
+      a.from.x + (a.to.x - a.from.x) * e,
+      a.from.y + (a.to.y - a.from.y) * e + arc,
+      a.from.z + (a.to.z - a.from.z) * e,
+    );
+  }
+  anims = anims.filter((a) => {
+    if (a.t >= 1) { animGroup.remove(a.mesh); return false; }
+    return true;
+  });
+}
+
+// ---- 3D doubling cube (sits on the left rail) -----------------------------
+let cubeMesh = null;
+let cubeShownVal = null;
+
+function makeCubeTexture(v) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#efe9da';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.strokeStyle = '#b9ac8c'; ctx.lineWidth = 6;
+  ctx.strokeRect(6, 6, 116, 116);
+  ctx.fillStyle = '#1a1206';
+  ctx.font = `bold ${v >= 10 ? 62 : 78}px Segoe UI, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(v), 64, 70);
+  return new THREE.CanvasTexture(c);
+}
+
+function updateCube(st) {
+  if (!st.cube || st.status === 'waiting') {
+    if (cubeMesh) cubeMesh.visible = false;
+    return;
+  }
+  if (!cubeMesh) {
+    cubeMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.85, 0.85, 0.85),
+      new THREE.MeshStandardMaterial({ roughness: 0.5 })
+    );
+    cubeMesh.castShadow = true;
+    scene.add(cubeMesh);
+  }
+  cubeMesh.visible = true;
+  if (st.cube.value !== cubeShownVal) {
+    cubeMesh.material.map = makeCubeTexture(st.cube.value);
+    cubeMesh.material.needsUpdate = true;
+    cubeShownVal = st.cube.value;
+  }
+  // Centered when unowned, otherwise parked on its owner's side of the rail.
+  const owner = st.cube.owner;
+  const z = owner === 'white' ? 4.8 : owner === 'black' ? -4.8 : 0;
+  cubeMesh.position.set(-(HALF_X - 0.55), BOARD_TOP + 0.55, z);
+}
 
 function makeCountLabel(count, color) {
   const c = document.createElement('canvas');
@@ -247,6 +367,7 @@ function renderCheckers(state) {
 let ws;
 let you = null;          // 'white' | 'black' | null (spectator)
 let state = null;
+let prevBoard = null;    // last rendered board, for move animation
 let selected = null;     // currently selected source point
 let reconnectAttempts = 0;
 
@@ -296,10 +417,14 @@ function onMessage(msg) {
     setLobbyMsg(msg.message);
     flashStatus(msg.message);
   } else if (msg.type === 'state') {
+    // Animate the checker(s) that moved since the previous board.
+    const moves = prevBoard ? computeAnims(prevBoard, msg.board) : [];
     state = msg;
     if (msg.you !== undefined) you = msg.you;
     selected = null;
     renderState();
+    for (const m of moves) spawnMoveAnim(m);
+    prevBoard = msg.board;
   }
 }
 
@@ -375,6 +500,10 @@ function renderState() {
       : state.cube.owner === you ? 'yours' : state.cube.owner;
     el('cubeChip').textContent = `Cube ×${state.cube.value} (${ownerTxt})`;
   }
+  updateCube(state);
+
+  // Pip count chip.
+  el('pipChip').textContent = `Pips  W ${pipCount(state.board, 'white')} · B ${pipCount(state.board, 'black')}`;
 
   // Action buttons: roll / double / take / drop.
   const pd = state.pendingDouble;
@@ -412,6 +541,18 @@ function renderState() {
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function COLORS_hex(c) { return '#' + c.toString(16).padStart(6, '0'); }
+
+// Pip count: total distance all a color's checkers must travel to bear off.
+// White bears off past 0 (pip = point number); black past 25 (pip = 25 - p);
+// a checker on the bar is 25 pips from home for either side.
+function pipCount(board, color) {
+  let s = board.bar[color] * 25;
+  for (let p = 1; p <= 24; p++) {
+    const c = board.points[p];
+    if (c && c.color === color) s += (color === 'white' ? p : 25 - p) * c.count;
+  }
+  return s;
+}
 
 // ---------------------------------------------------------------------------
 // Move selection + highlights
@@ -523,7 +664,9 @@ window.addEventListener('resize', () => {
 
 function animate() {
   requestAnimationFrame(animate);
+  const dt = clock.getDelta();
   controls.update();
+  stepAnims(dt);
   renderer.render(scene, camera);
 }
 animate();

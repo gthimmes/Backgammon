@@ -26,7 +26,12 @@ If port 3000 is busy, pick another: `PORT=3100 npm start`.
 - **Drag** — orbit the camera around the board
 - **Right-drag** — pan
 - **Scroll** — zoom in / out
-- **Click** a checker → click a highlighted destination to move
+- **Click** a checker → click a highlighted destination to move (checkers slide
+  to their destination and land on the point)
+
+The HUD shows the running match score, the current cube value/owner, and each
+side's live **pip count**. A 3D doubling cube sits on the rail and moves to the
+side of whoever owns it.
 
 ## Rules implemented
 
@@ -62,6 +67,21 @@ built-in test runner — no extra dependencies. Covers movement direction,
 blocking/hitting, bar re-entry, bearing off (including the overflow rule),
 forced maximal dice usage, the "must play the larger die" rule, win detection,
 and a full deterministic self-played game that checks checker conservation.
+
+## Deploy
+
+The server binds to `0.0.0.0` and honors the `PORT` environment variable, so it
+runs on most Node hosts with no changes. A `Procfile` (`web: node
+server/index.js`) is included.
+
+- **Render** — New → Web Service → connect this repo. Build: `npm install`.
+  Start: `npm start`. Render sets `PORT` automatically; WebSockets work on the
+  default plan.
+- **Railway / Fly.io / Heroku** — the `Procfile` and `start` script are picked
+  up directly; just deploy from the repo.
+
+Requires Node 18+ (see `engines` in `package.json`). The Three.js client loads
+from a CDN via an import map, so there is no front-end build step.
 
 ## Layout
 

@@ -298,6 +298,7 @@ function handle(ws, msg) {
   }
 }
 
-server.listen(PORT, () => {
-  console.log(`Backgammon server running: http://localhost:${PORT}`);
+// Bind on all interfaces so cloud hosts (Render/Fly/Railway/etc.) can route to it.
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Backgammon server running on port ${PORT}`);
 });
