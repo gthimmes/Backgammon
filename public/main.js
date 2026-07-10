@@ -317,6 +317,9 @@ el('joinBtn').onclick = () => {
 };
 el('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('joinBtn').click(); });
 el('rollBtn').onclick = () => sendWs({ type: 'roll' });
+el('doubleBtn').onclick = () => sendWs({ type: 'double' });
+el('takeBtn').onclick = () => sendWs({ type: 'respondDouble', accept: true });
+el('dropBtn').onclick = () => sendWs({ type: 'respondDouble', accept: false });
 el('newGameBtn').onclick = () => sendWs({ type: 'reset' });
 
 function setLobbyMsg(m) { el('lobbyMsg').textContent = m || ''; }
@@ -365,9 +368,24 @@ function renderState() {
     }
   }
 
-  // Roll button.
-  const canRoll = state.status === 'playing' && state.current === you && !state.turn;
+  // Score + cube chips.
+  if (state.score) el('scoreChip').textContent = `${state.score.white} – ${state.score.black}`;
+  if (state.cube) {
+    const ownerTxt = !state.cube.owner ? 'center'
+      : state.cube.owner === you ? 'yours' : state.cube.owner;
+    el('cubeChip').textContent = `Cube ×${state.cube.value} (${ownerTxt})`;
+  }
+
+  // Action buttons: roll / double / take / drop.
+  const pd = state.pendingDouble;
+  const myDecision = pd && you && pd.by !== you && state.status === 'playing';
+  const canRoll = state.status === 'playing' && state.current === you && !state.turn && !pd;
+  const canDouble = canRoll && (!state.cube || !state.cube.owner || state.cube.owner === you);
   el('rollBtn').classList.toggle('hidden', !canRoll);
+  el('doubleBtn').classList.toggle('hidden', !canDouble);
+  el('doubleBtn').textContent = state.cube ? `Double to ${state.cube.value * 2}` : 'Double';
+  el('takeBtn').classList.toggle('hidden', !myDecision);
+  el('dropBtn').classList.toggle('hidden', !myDecision);
 
   // Status message — flag a disconnected opponent while the game is live.
   let statusText = state.message || '';

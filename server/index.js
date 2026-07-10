@@ -5,7 +5,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import {
-  initBoard, singleMoves, applyMove, legalMoves, checkWinner, OPP,
+  initBoard, singleMoves, applyMove, legalMoves, checkWinner, scoreMultiplier, OPP,
 } from './backgammon.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,7 +42,27 @@ function newGame() {
     status: 'waiting',    // waiting | playing | finished
     winner: null,
     message: '',
+    cube: { value: 1, owner: null }, // owner null = centered (either may double)
+    pendingDouble: null,  // { by } while a double offer awaits a response
   };
+}
+
+// A player may double at the start of their turn (before rolling) if the cube
+// is centered or they own it, and no offer is already pending.
+function canDouble(game, color) {
+  return game.status === 'playing' && game.current === color && !game.turn
+    && !game.pendingDouble && (game.cube.owner === null || game.cube.owner === color);
+}
+
+// Award points for a finished game and update the running match score.
+function finishGame(room, winner, points, message) {
+  const g = room.game;
+  g.status = 'finished';
+  g.winner = winner;
+  g.turn = null;
+  g.pendingDouble = null;
+  room.score[winner] += points;
+  g.message = message;
 }
 
 /** Opening roll: each side rolls one die, higher goes first and plays both. */
@@ -88,6 +108,9 @@ function serializeState(room) {
     winner: g.winner,
     message: g.message,
     legal: currentLegalMoves(g),
+    cube: g.cube,
+    pendingDouble: g.pendingDouble,
+    score: room.score,
     players: {
       white: !!room.players.white,
       black: !!room.players.black,
@@ -153,6 +176,7 @@ function handle(ws, msg) {
       const token = randomUUID();
       const room = {
         code, game: newGame(), cleanupTimer: null,
+        score: { white: 0, black: 0 },
         players: { white: { token, ws }, black: null },
         clients: new Set([ws]),
       };
@@ -203,8 +227,36 @@ function handle(ws, msg) {
     case 'roll': {
       const room = ws.room; if (!room) return;
       const g = room.game;
-      if (g.status !== 'playing' || ws.color !== g.current || g.turn) return;
+      if (g.status !== 'playing' || ws.color !== g.current || g.turn || g.pendingDouble) return;
       startTurnRoll(g);
+      broadcast(room);
+      break;
+    }
+    case 'double': {
+      const room = ws.room; if (!room) return;
+      const g = room.game;
+      if (!canDouble(g, ws.color)) return;
+      g.pendingDouble = { by: ws.color };
+      g.message = `${ws.color} offers to double to ${g.cube.value * 2}.`;
+      broadcast(room);
+      break;
+    }
+    case 'respondDouble': {
+      const room = ws.room; if (!room) return;
+      const g = room.game;
+      // Only the player being doubled may respond.
+      if (!g.pendingDouble || ws.color !== OPP[g.pendingDouble.by]) return;
+      const doubler = g.pendingDouble.by;
+      if (msg.accept) {
+        g.cube.value *= 2;
+        g.cube.owner = ws.color; // taker now owns the cube
+        g.pendingDouble = null;
+        g.message = `${ws.color} takes. Cube is now ${g.cube.value}.`;
+      } else {
+        // Drop: the doubler wins the current (pre-double) stake.
+        finishGame(room, doubler, g.cube.value,
+          `${ws.color} drops. ${doubler} wins ${g.cube.value} point${g.cube.value === 1 ? '' : 's'}.`);
+      }
       broadcast(room);
       break;
     }
@@ -223,10 +275,10 @@ function handle(ws, msg) {
 
       const winner = checkWinner(g.board);
       if (winner) {
-        g.status = 'finished';
-        g.winner = winner;
-        g.message = `${winner} wins the game!`;
-        g.turn = null;
+        const mult = scoreMultiplier(g.board, winner);
+        const points = mult * g.cube.value;
+        const kind = mult === 3 ? 'a backgammon' : mult === 2 ? 'a gammon' : 'the game';
+        finishGame(room, winner, points, `${winner} wins ${kind} — ${points} point${points === 1 ? '' : 's'}!`);
       } else if (g.turn.remaining.length === 0 || currentLegalMoves(g).length === 0) {
         g.message = `${g.current} completed their turn.`;
         endTurn(g);

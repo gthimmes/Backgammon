@@ -35,6 +35,10 @@ If port 3000 is busy, pick another: `PORT=3100 npm start`.
 - Bearing off (with the highest-point overflow rule)
 - "Must use both dice / must play the larger die" enforcement
 - Automatic turn-pass when no legal move exists, and win detection
+- **Doubling cube** — offer a double at the start of your turn (before rolling)
+  if you own the cube or it's centered; opponent takes (cube doubles, ownership
+  passes) or drops (you win the current stake). Gammons score 2× and
+  backgammons 3× the cube value, tracked in a running match score.
 
 The server validates every move, so the two clients can never desync and
 illegal moves are rejected.

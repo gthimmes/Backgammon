@@ -192,3 +192,19 @@ export function checkWinner(board) {
   if (board.off.black === 15) return 'black';
   return null;
 }
+
+// Stake multiplier for a completed game, before the doubling cube is applied:
+//   1 = single, 2 = gammon (loser bore off none),
+//   3 = backgammon (loser bore off none AND still has a checker on the bar or
+//       in the winner's home board).
+export function scoreMultiplier(board, winner) {
+  const loser = OPP[winner];
+  if (board.off[loser] > 0) return 1; // loser saved at least one checker
+  if (board.bar[loser] > 0) return 3; // trapped on the bar
+  const [lo, hi] = winner === 'white' ? [1, 6] : [19, 24]; // winner's home board
+  for (let p = lo; p <= hi; p++) {
+    const c = board.points[p];
+    if (c && c.color === loser) return 3;
+  }
+  return 2; // gammon
+}

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   initBoard, singleMoves, applyMove, maxMoves, legalMoves,
-  canBearOff, checkWinner, OPP,
+  canBearOff, checkWinner, scoreMultiplier, OPP,
 } from '../server/backgammon.js';
 
 // ---- helpers ---------------------------------------------------------------
@@ -223,6 +223,33 @@ test('checkWinner detects 15 borne off', () => {
   assert.equal(checkWinner(makeBoard({}, {}, { white: 15 })), 'white');
   assert.equal(checkWinner(makeBoard({}, {}, { black: 15 })), 'black');
   assert.equal(checkWinner(initBoard()), null);
+});
+
+// ---- gammon / backgammon scoring ------------------------------------------
+
+test('single win when loser has borne off at least one checker', () => {
+  const b = makeBoard({}, {}, { white: 15, black: 1 });
+  assert.equal(scoreMultiplier(b, 'white'), 1);
+});
+
+test('gammon when loser bore off none and is not trapped', () => {
+  // Black bore off none, all black checkers sit outside white home (1..6) and bar.
+  const b = makeBoard({ 13: ['black', 15] }, {}, { white: 15, black: 0 });
+  assert.equal(scoreMultiplier(b, 'white'), 2);
+});
+
+test('backgammon when loser has a checker on the bar', () => {
+  const b = makeBoard({ 13: ['black', 14] }, { black: 1 }, { white: 15, black: 0 });
+  assert.equal(scoreMultiplier(b, 'white'), 3);
+});
+
+test("backgammon when loser has a checker in the winner's home board", () => {
+  // White wins; a black checker still sits in white's home (points 1..6).
+  const b = makeBoard({ 3: ['black', 1], 13: ['black', 14] }, {}, { white: 15, black: 0 });
+  assert.equal(scoreMultiplier(b, 'white'), 3);
+  // Mirror: black wins with a white checker in black's home (19..24).
+  const b2 = makeBoard({ 22: ['white', 1], 12: ['white', 14] }, {}, { black: 15, white: 0 });
+  assert.equal(scoreMultiplier(b2, 'black'), 3);
 });
 
 // ---- integration: a full random game terminates and conserves checkers -----
