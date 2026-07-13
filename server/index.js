@@ -7,12 +7,16 @@ import { fileURLToPath } from 'url';
 import {
   initBoard, singleMoves, applyMove, legalMoves, checkWinner, scoreMultiplier, OPP,
 } from './backgammon.js';
+import { chooseTurn, shouldDouble, shouldTake } from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 // How long a room is kept alive after its last client disconnects, so a
 // player who refreshes or briefly drops can reclaim their seat.
 const CLEANUP_MS = 2 * 60 * 1000;
+// Pacing for the computer opponent so moves are watchable, not instant.
+const AI_THINK_MS = 650;
+const AI_MOVE_MS = 700;
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -65,6 +69,20 @@ function finishGame(room, winner, points, message) {
   g.message = message;
 }
 
+// If the board is won, finish the game with cube-scaled gammon/backgammon
+// scoring. Returns true if the game ended.
+function finishIfWon(room) {
+  const g = room.game;
+  const winner = checkWinner(g.board);
+  if (!winner) return false;
+  const mult = scoreMultiplier(g.board, winner);
+  const points = mult * g.cube.value;
+  const kind = mult === 3 ? 'a backgammon' : mult === 2 ? 'a gammon' : 'the game';
+  const who = room.ai === winner ? 'Computer' : winner;
+  finishGame(room, winner, points, `${who} wins ${kind} — ${points} point${points === 1 ? '' : 's'}!`);
+  return true;
+}
+
 /** Opening roll: each side rolls one die, higher goes first and plays both. */
 function openingRoll(game) {
   let a, b;
@@ -111,14 +129,15 @@ function serializeState(room) {
     cube: g.cube,
     pendingDouble: g.pendingDouble,
     score: room.score,
+    ai: room.ai || null,       // which seat, if any, the computer plays
     players: {
       white: !!room.players.white,
       black: !!room.players.black,
     },
-    // Which seats currently have a live socket (vs. temporarily disconnected).
+    // Which seats currently have a live socket (the AI seat counts as present).
     connected: {
-      white: !!(room.players.white && room.players.white.ws),
-      black: !!(room.players.black && room.players.black.ws),
+      white: !!(room.players.white && room.players.white.ws) || room.ai === 'white',
+      black: !!(room.players.black && room.players.black.ws) || room.ai === 'black',
     },
     code: room.code,
   };
@@ -144,6 +163,116 @@ function broadcast(room) {
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+// ---------------------------------------------------------------------------
+// Computer opponent driver
+// ---------------------------------------------------------------------------
+
+const alive = (room) => rooms.get(room.code) === room;
+
+// Advance the game whenever it is the computer's move (or the computer owes a
+// response to the human's double). Scheduled via timers so sub-moves are
+// watchable and there is no deep recursion.
+function maybeDriveAI(room) {
+  if (!room.ai || !alive(room)) return;
+  const g = room.game;
+  if (g.status !== 'playing') return;
+
+  // Respond to a double the human offered the computer.
+  if (g.pendingDouble && OPP[g.pendingDouble.by] === room.ai) {
+    setTimeout(() => aiRespondDouble(room), AI_THINK_MS);
+    return;
+  }
+  if (g.current !== room.ai) return;   // human's move
+  if (g.pendingDouble) return;         // computer already doubled; awaiting human
+
+  setTimeout(() => {
+    if (!alive(room) || g.status !== 'playing' || g.current !== room.ai || g.pendingDouble) return;
+    if (g.turn) {
+      // Dice already assigned (opening roll) — just play them.
+      aiPlayTurn(room, false);
+      return;
+    }
+    // Start of turn: consider doubling, otherwise roll and play.
+    if (shouldDouble(g, room.ai)) {
+      g.pendingDouble = { by: room.ai };
+      g.message = `Computer offers to double to ${g.cube.value * 2}.`;
+      broadcast(room);
+      return; // wait for the human's take/drop
+    }
+    aiPlayTurn(room, true);
+  }, AI_THINK_MS);
+}
+
+function aiRespondDouble(room) {
+  if (!alive(room)) return;
+  const g = room.game;
+  if (g.status !== 'playing' || !g.pendingDouble || OPP[g.pendingDouble.by] !== room.ai) return;
+  const by = g.pendingDouble.by;
+  if (shouldTake(g, room.ai)) {
+    g.cube.value *= 2;
+    g.cube.owner = room.ai;
+    g.pendingDouble = null;
+    g.message = `Computer takes. Cube is now ${g.cube.value}.`;
+    broadcast(room);
+    maybeDriveAI(room);
+  } else {
+    finishGame(room, by, g.cube.value,
+      `Computer drops. ${by} wins ${g.cube.value} point${g.cube.value === 1 ? '' : 's'}.`);
+    broadcast(room);
+  }
+}
+
+function aiPlayTurn(room, doRoll) {
+  const g = room.game;
+  if (doRoll) {
+    startTurnRoll(g);
+    broadcast(room);
+    if (!g.turn) { // rolled but no legal move — turn already passed
+      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      return;
+    }
+  }
+
+  const { moves } = chooseTurn(g.board, g.current, g.turn.dice);
+  let i = 0;
+  const applyNext = () => {
+    if (!alive(room) || g.status !== 'playing') return;
+    if (i >= moves.length || !g.turn) {
+      if (g.turn) { g.message = `Computer completed its turn.`; endTurn(g); }
+      broadcast(room);
+      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      return;
+    }
+    const want = moves[i++];
+    const legal = currentLegalMoves(g);
+    const mv = legal.find((m) => m.from === want.from && m.to === want.to && m.die === want.die)
+      || legal.find((m) => m.from === want.from && m.to === want.to)
+      || legal[0];
+    if (!mv) { // nothing legal left
+      g.message = `Computer completed its turn.`;
+      endTurn(g);
+      broadcast(room);
+      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      return;
+    }
+    g.board = applyMove(g.board, mv, g.current);
+    const di = g.turn.remaining.indexOf(mv.die);
+    if (di >= 0) g.turn.remaining.splice(di, 1);
+
+    if (finishIfWon(room)) { broadcast(room); return; }
+    if (g.turn.remaining.length === 0 || currentLegalMoves(g).length === 0) {
+      g.message = `Computer completed its turn.`;
+      endTurn(g);
+      broadcast(room);
+      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      return;
+    }
+    broadcast(room);
+    setTimeout(applyNext, AI_MOVE_MS);
+  };
+  setTimeout(applyNext, AI_MOVE_MS);
 }
 
 wss.on('connection', (ws) => {
@@ -180,11 +309,18 @@ function handle(ws, msg) {
         players: { white: { token, ws }, black: null },
         clients: new Set([ws]),
       };
+      // Single-player: seat the computer as black and start immediately.
+      if (msg.vsAI) {
+        room.ai = 'black';
+        room.players.black = { token: 'AI', ws: null, ai: true };
+        openingRoll(room.game);
+      }
       rooms.set(code, room);
       ws.room = room;
       ws.color = 'white';
       send(ws, { type: 'joined', code, color: 'white', token });
       broadcast(room);
+      if (room.ai) maybeDriveAI(room);
       break;
     }
     case 'join': {
@@ -239,6 +375,7 @@ function handle(ws, msg) {
       g.pendingDouble = { by: ws.color };
       g.message = `${ws.color} offers to double to ${g.cube.value * 2}.`;
       broadcast(room);
+      maybeDriveAI(room);
       break;
     }
     case 'respondDouble': {
@@ -254,10 +391,12 @@ function handle(ws, msg) {
         g.message = `${ws.color} takes. Cube is now ${g.cube.value}.`;
       } else {
         // Drop: the doubler wins the current (pre-double) stake.
+        const who = room.ai === doubler ? 'Computer' : doubler;
         finishGame(room, doubler, g.cube.value,
-          `${ws.color} drops. ${doubler} wins ${g.cube.value} point${g.cube.value === 1 ? '' : 's'}.`);
+          `${ws.color} drops. ${who} wins ${g.cube.value} point${g.cube.value === 1 ? '' : 's'}.`);
       }
       broadcast(room);
+      maybeDriveAI(room);
       break;
     }
     case 'move': {
@@ -273,17 +412,14 @@ function handle(ws, msg) {
       const idx = g.turn.remaining.indexOf(mv.die);
       if (idx >= 0) g.turn.remaining.splice(idx, 1);
 
-      const winner = checkWinner(g.board);
-      if (winner) {
-        const mult = scoreMultiplier(g.board, winner);
-        const points = mult * g.cube.value;
-        const kind = mult === 3 ? 'a backgammon' : mult === 2 ? 'a gammon' : 'the game';
-        finishGame(room, winner, points, `${winner} wins ${kind} — ${points} point${points === 1 ? '' : 's'}!`);
-      } else if (g.turn.remaining.length === 0 || currentLegalMoves(g).length === 0) {
-        g.message = `${g.current} completed their turn.`;
-        endTurn(g);
+      if (!finishIfWon(room)) {
+        if (g.turn.remaining.length === 0 || currentLegalMoves(g).length === 0) {
+          g.message = `${g.current} completed their turn.`;
+          endTurn(g);
+        }
       }
       broadcast(room);
+      maybeDriveAI(room);
       break;
     }
     case 'reset': {
@@ -291,6 +427,7 @@ function handle(ws, msg) {
       room.game = newGame();
       if (room.players.white && room.players.black) openingRoll(room.game);
       broadcast(room);
+      maybeDriveAI(room);
       break;
     }
     default:

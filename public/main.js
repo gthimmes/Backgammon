@@ -434,6 +434,7 @@ function onMessage(msg) {
 const el = (id) => document.getElementById(id);
 const lobby = el('lobby'), hud = el('hud');
 
+el('soloBtn').onclick = () => sendWs({ type: 'create', vsAI: true });
 el('createBtn').onclick = () => sendWs({ type: 'create' });
 el('joinBtn').onclick = () => {
   const code = el('codeInput').value.trim().toUpperCase();
@@ -471,10 +472,12 @@ function renderState() {
     turnChip.textContent = state.players.white && state.players.black
       ? 'Starting…' : 'Waiting for opponent…';
   } else if (state.status === 'finished') {
-    turnChip.textContent = `${state.winner} wins`;
+    turnChip.textContent = `${seatName(state.winner)} wins`;
   } else {
     const mine = state.current === you;
-    turnChip.textContent = mine ? 'Your turn' : `${state.current}'s turn`;
+    turnChip.textContent = mine ? 'Your turn'
+      : state.current === state.ai ? 'Computer is thinking…'
+      : `${state.current}'s turn`;
     turnChip.style.color = mine ? COLORS_hex(COLORS.select) : '';
   }
 
@@ -530,7 +533,7 @@ function renderState() {
   const banner = el('winBanner');
   if (state.status === 'finished') {
     banner.classList.remove('hidden');
-    banner.innerHTML = `${state.winner === you ? '🏆 You win!' : `${cap(state.winner)} wins`}
+    banner.innerHTML = `${state.winner === you ? '🏆 You win!' : `${seatName(state.winner)} wins`}
       <small>Click “New game” to play again.</small>`;
   } else {
     banner.classList.add('hidden');
@@ -540,6 +543,8 @@ function renderState() {
 }
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+// Display name for a seat: the computer opponent is labelled "Computer".
+function seatName(color) { return state && state.ai === color ? 'Computer' : cap(color); }
 function COLORS_hex(c) { return '#' + c.toString(16).padStart(6, '0'); }
 
 // Pip count: total distance all a color's checkers must travel to bear off.

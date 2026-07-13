@@ -15,11 +15,23 @@ If port 3000 is busy, pick another: `PORT=3100 npm start`.
 
 ## Play
 
-1. Open the URL in a browser and click **Create new game** — you get a 4-letter room code.
-2. Your opponent opens the same URL and enters that code (or open a second
-   browser tab to play both sides yourself).
-3. The higher opening roll goes first. Click a checker to select it; legal
-   destinations light up green — click one to move.
+- **Vs Computer** — click **Play vs Computer** to start a single-player game
+  against the built-in AI (see below). No account, no API key, nothing to set up.
+- **Online** — click **Create online game** for a 4-letter room code; your
+  opponent opens the same URL and enters it (or open a second tab to play both
+  sides). The higher opening roll goes first.
+
+Click a checker to select it; legal destinations light up green — click one to move.
+
+## Computer opponent
+
+The AI runs entirely on the server — no external service, model, or API key.
+For each roll it enumerates every legal full-turn sequence and scores the
+resulting positions with a backgammon evaluation function that weighs the pip
+race, blot exposure (using real opponent shot counts, including combination and
+doubles shots), home-board and prime structure, defensive anchors, and bearing
+off. It also uses the doubling cube — offering, taking, and dropping based on a
+race-equity estimate. It beats a random player in ~19 of 20 games.
 
 ## Controls
 
@@ -86,6 +98,7 @@ from a CDN via an import map, so there is no front-end build step.
 ## Layout
 
 - `server/backgammon.js` — pure rules engine (move generation, legality, bearing off)
-- `server/index.js` — HTTP + WebSocket server, rooms, turn flow, reconnect
+- `server/ai.js` — computer opponent (turn enumeration + position evaluation)
+- `server/index.js` — HTTP + WebSocket server, rooms, turn flow, reconnect, AI driver
 - `public/` — Three.js client (`main.js`), UI (`index.html`, `style.css`)
-- `test/backgammon.test.js` — rules-engine unit tests
+- `test/backgammon.test.js`, `test/ai.test.js` — unit tests
