@@ -74,11 +74,24 @@ minutes to allow reconnection before it's cleaned up.
 npm test
 ```
 
-Runs the rules-engine unit suite (`test/backgammon.test.js`) with Node's
-built-in test runner — no extra dependencies. Covers movement direction,
-blocking/hitting, bar re-entry, bearing off (including the overflow rule),
-forced maximal dice usage, the "must play the larger die" rule, win detection,
-and a full deterministic self-played game that checks checker conservation.
+Runs the whole suite (60+ tests) with Node's built-in runner — no extra
+dependencies. Three layers:
+
+- **Unit** — the rules engine (`test/backgammon.test.js`: movement, hitting, bar
+  re-entry, bearing off + overflow, forced maximal dice usage, the larger-die
+  rule, gammon/backgammon scoring, a deterministic self-played game) and the AI
+  (`test/ai.test.js`: turn enumeration, shot counting, tactical choices, cube
+  take/drop, and a 20-game match the AI wins against a random player).
+- **Integration** (`test/server.integration.test.js`) — drives the real
+  WebSocket server in-process: matchmaking, spectators, move validation (the
+  server offers exactly the engine-legal moves; illegal/out-of-turn moves are
+  rejected), the doubling cube (offer/take/drop, score, reset), reconnect with
+  tokens, and single-player AI wiring.
+- **End-to-end** (`test/e2e.test.js`) — plays complete games over WebSocket
+  (human-vs-human, human-vs-computer, and a mid-game disconnect/reconnect),
+  asserting checker conservation on *every* board, a valid winner, and correct
+  scoring. The AI pacing is configurable via `BG_AI_THINK_MS` / `BG_AI_MOVE_MS`
+  so full computer games run quickly under test.
 
 ## Deploy
 

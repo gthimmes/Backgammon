@@ -15,8 +15,9 @@ const PORT = process.env.PORT || 3000;
 // player who refreshes or briefly drops can reclaim their seat.
 const CLEANUP_MS = 2 * 60 * 1000;
 // Pacing for the computer opponent so moves are watchable, not instant.
-const AI_THINK_MS = 650;
-const AI_MOVE_MS = 700;
+// Overridable via env (tests set these near 0 to run full games quickly).
+const aiThinkMs = () => Number(process.env.BG_AI_THINK_MS ?? 650);
+const aiMoveMs = () => Number(process.env.BG_AI_MOVE_MS ?? 700);
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -181,7 +182,7 @@ function maybeDriveAI(room) {
 
   // Respond to a double the human offered the computer.
   if (g.pendingDouble && OPP[g.pendingDouble.by] === room.ai) {
-    setTimeout(() => aiRespondDouble(room), AI_THINK_MS);
+    setTimeout(() => aiRespondDouble(room), aiThinkMs());
     return;
   }
   if (g.current !== room.ai) return;   // human's move
@@ -202,7 +203,7 @@ function maybeDriveAI(room) {
       return; // wait for the human's take/drop
     }
     aiPlayTurn(room, true);
-  }, AI_THINK_MS);
+  }, aiThinkMs());
 }
 
 function aiRespondDouble(room) {
@@ -230,7 +231,7 @@ function aiPlayTurn(room, doRoll) {
     startTurnRoll(g);
     broadcast(room);
     if (!g.turn) { // rolled but no legal move — turn already passed
-      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      setTimeout(() => maybeDriveAI(room), aiThinkMs());
       return;
     }
   }
@@ -242,7 +243,7 @@ function aiPlayTurn(room, doRoll) {
     if (i >= moves.length || !g.turn) {
       if (g.turn) { g.message = `Computer completed its turn.`; endTurn(g); }
       broadcast(room);
-      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      setTimeout(() => maybeDriveAI(room), aiThinkMs());
       return;
     }
     const want = moves[i++];
@@ -254,7 +255,7 @@ function aiPlayTurn(room, doRoll) {
       g.message = `Computer completed its turn.`;
       endTurn(g);
       broadcast(room);
-      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      setTimeout(() => maybeDriveAI(room), aiThinkMs());
       return;
     }
     g.board = applyMove(g.board, mv, g.current);
@@ -266,13 +267,13 @@ function aiPlayTurn(room, doRoll) {
       g.message = `Computer completed its turn.`;
       endTurn(g);
       broadcast(room);
-      setTimeout(() => maybeDriveAI(room), AI_THINK_MS);
+      setTimeout(() => maybeDriveAI(room), aiThinkMs());
       return;
     }
     broadcast(room);
-    setTimeout(applyNext, AI_MOVE_MS);
+    setTimeout(applyNext, aiMoveMs());
   };
-  setTimeout(applyNext, AI_MOVE_MS);
+  setTimeout(applyNext, aiMoveMs());
 }
 
 wss.on('connection', (ws) => {
@@ -366,6 +367,9 @@ function handle(ws, msg) {
       if (g.status !== 'playing' || ws.color !== g.current || g.turn || g.pendingDouble) return;
       startTurnRoll(g);
       broadcast(room);
+      // A roll with no legal moves auto-passes the turn — which may hand it to
+      // the computer, so give the AI a chance to act.
+      maybeDriveAI(room);
       break;
     }
     case 'double': {
@@ -435,7 +439,27 @@ function handle(ws, msg) {
   }
 }
 
-// Bind on all interfaces so cloud hosts (Render/Fly/Railway/etc.) can route to it.
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Backgammon server running on port ${PORT}`);
-});
+// Start listening. Pass port 0 to get an OS-assigned free port (used by tests).
+// Returns a handle with the actual port and a close() that shuts everything down.
+export function startServer(port = PORT) {
+  return new Promise((resolve) => {
+    // Bind on all interfaces so cloud hosts (Render/Fly/Railway/etc.) can route to it.
+    server.listen(port, '0.0.0.0', () => {
+      resolve({
+        server,
+        wss,
+        port: server.address().port,
+        close: () => new Promise((res) => {
+          for (const client of wss.clients) client.terminate();
+          wss.close(() => server.close(() => res()));
+        }),
+      });
+    });
+  });
+}
+
+// Run the server when this file is executed directly (not when imported by tests).
+const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (invokedDirectly) {
+  startServer(PORT).then(({ port }) => console.log(`Backgammon server running on port ${port}`));
+}
