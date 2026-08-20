@@ -107,3 +107,18 @@ button.ghost { background: transparent; }
   box-shadow: 0 30px 80px rgba(0,0,0,.6); backdrop-filter: blur(12px);
 }
 #winBanner small { display: block; font-size: 14px; font-weight: 400; color: var(--muted); margin-top: 10px; }
+
+/* In-app help center (help-navigator) — match the game's panel styling.
+   The widget lives in a shadow root; these custom properties are its theme API. */
+help-navigator-root {
+  --hn-accent: var(--accent);
+  --hn-accent-fg: #1a1206;
+  --hn-bg: #141a26;
+  --hn-bg-soft: #1b2333;
+  --hn-fg: var(--text);
+  --hn-muted: var(--muted);
+  --hn-border: var(--border);
+  --hn-radius: 12px;
+  --hn-font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --hn-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}

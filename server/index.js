@@ -21,6 +21,9 @@ const aiMoveMs = () => Number(process.env.BG_AI_MOVE_MS ?? 700);
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
+// In-app help widget (no client bundler, so the IIFE build is served straight
+// from the installed package — upgrades to help-navigator are picked up here).
+app.use('/vendor/help-navigator', express.static(path.join(__dirname, '..', 'node_modules', 'help-navigator', 'dist')));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });

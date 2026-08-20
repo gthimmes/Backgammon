@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "help-navigator": "github:gthimmes/help-navigator",
     "ws": "^8.18.0"
   }
 }
